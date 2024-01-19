@@ -219,7 +219,8 @@ class PyEvalLoop:
             args = [callable_or_firstarg, *args]
 
         # TODO: handle kw_names
-        result = callable(*args)
+        with myhook():
+            result = callable(*args)
         self._stack.push(result)
         return EvalStatus.advance()
 
@@ -266,7 +267,9 @@ def foo(x, a=11):
     return b
 
 
+
 def demo():
+    global myhook
     # Generate a frame evaluation hook, called `my_custom_hook`, that will use
     # the above frame_evaluator function to evaluate frames when the hook is
     # enabled.
