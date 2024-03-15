@@ -326,289 +326,290 @@ def generate(name, eval_replacement_function):
         builder.ret(tmp)
     builder.branch(bb_fallback)
 
-    # Set up co_extra slot with a dict for arbitrary cache use.
-    # If call stat is zero and the state is NULL then there's no cache set yet
-    # as a result one needs to be set up!
-    stat_pred = builder.icmp_signed('==', stat, i32_zero)
-    state_pred = builder.icmp_unsigned('==', builder.load(state),
-                                    cgctx.get_null_value(state.type))
-    all_pred = builder.and_(stat_pred, state_pred)
-    with builder.if_else(all_pred) as (then, otherwise):
-        with then:
-            if _DEBUG:
-                cgctx.printf(builder, "co_extra cache miss\n")
+    if False:
+        # Set up co_extra slot with a dict for arbitrary cache use.
+        # If call stat is zero and the state is NULL then there's no cache set yet
+        # as a result one needs to be set up!
+        stat_pred = builder.icmp_signed('==', stat, i32_zero)
+        state_pred = builder.icmp_unsigned('==', builder.load(state),
+                                        cgctx.get_null_value(state.type))
+        all_pred = builder.and_(stat_pred, state_pred)
+        with builder.if_else(all_pred) as (then, otherwise):
+            with then:
+                if _DEBUG:
+                    cgctx.printf(builder, "co_extra cache miss\n")
 
-            co_extra_cache = builder.call(PyDict_New, ())
-            with builder.if_then(cgctx.is_null(builder, co_extra_cache)):
-                cgctx.printf(builder, "PyDict_New failed\n")
-                builder.ret(PyObject_NULL)
-            builder.store(co_extra_cache, state)
-            state_void_ptr = builder.bitcast(builder.load(state), lt._void_star)
-            tmp = builder.call(_PyCode_SetExtra, (builder.load(co),
-                                                extra_code_index1,
-                                                state_void_ptr))
-            with builder.if_then(builder.icmp_signed("!=", tmp, i32_zero)):
-                # cgctx.printf(builder, "_PyCode_SetExtra failed, %d\n",
-                #              extra_code_index1)
-
-                # fmt_str = cgctx.insert_const_string(mod, f"_PyCode_SetExtra failed --- co: %R\n")
-                # builder.call(PySys_FormatStderr, [fmt_str, builder.load(co)])
-                # builder.ret(PyObject_NULL)
-                builder.call(PyErr_Clear, ())
-                builder.branch(bb_fallback)
-            if _DEBUG:
-                cgctx.printf(builder,
-                            ("after _PyCode_SetExtra in then: stat = %d,"
-                            "state = %d\n"), stat, builder.load(state))
-                tmp = builder.call(_PyCode_GetExtra,
-                                (builder.load(co), extra_code_index1,
-                                    builder.bitcast(state,
-                                                    void_star_star)))
+                co_extra_cache = builder.call(PyDict_New, ())
+                with builder.if_then(cgctx.is_null(builder, co_extra_cache)):
+                    cgctx.printf(builder, "PyDict_New failed\n")
+                    builder.ret(PyObject_NULL)
+                builder.store(co_extra_cache, state)
+                state_void_ptr = builder.bitcast(builder.load(state), lt._void_star)
+                tmp = builder.call(_PyCode_SetExtra, (builder.load(co),
+                                                    extra_code_index1,
+                                                    state_void_ptr))
                 with builder.if_then(builder.icmp_signed("!=", tmp, i32_zero)):
-                    cgctx.printf(builder, "_PyCode_GetExtra failed\n")
+                    # cgctx.printf(builder, "_PyCode_SetExtra failed, %d\n",
+                    #              extra_code_index1)
+
+                    # fmt_str = cgctx.insert_const_string(mod, f"_PyCode_SetExtra failed --- co: %R\n")
+                    # builder.call(PySys_FormatStderr, [fmt_str, builder.load(co)])
+                    # builder.ret(PyObject_NULL)
                     builder.call(PyErr_Clear, ())
                     builder.branch(bb_fallback)
-                cgctx.printf(builder,
-                            ("after _PyCode_GetExtra in then: stat = %d, "
-                            "state = %d\n"), stat, builder.load(state))
-        with otherwise:
-            if _DEBUG:
-                cgctx.printf(builder, "co_extra \n")
-
-    # The co_extra cache is now set up, now work on the frame.
-    interp_field = builder.gep(ts, [int32(x) for x in (0, 2)])
-    loaded_interp_field = builder.load(interp_field)
-
-    # store a reference to the current frame interpreter
-    original_evaluator = builder.alloca(_PyFrameEvalFunction_ty)
-    builder.store(builder.call(_PyInterpreterState_GetEvalFrameFunc,
-                            (loaded_interp_field,)), original_evaluator)
-    # use the stock interpreter to evaluate the python payload
-    builder.call(_PyInterpreterState_SetEvalFrameFunc,
-                (loaded_interp_field, _PyEval_EvalFrameDefault))
-
-    # this unpickles and loads the user defined eval replacement function
-    pickled_payload = pickle.dumps(eval_replacement_function)
-    payload = cgctx.insert_const_bytes(mod, pickled_payload)
-    sz = len(pickled_payload)
-    len_payload = cgctx.global_constant(mod, "_len_payload",
-                                        lt._llvm_py_ssize_t(sz))
-
-    py_mod_name = cgctx.insert_const_string(mod, "pickle")
-    py_mod = builder.call(PyImport_ImportModule, (py_mod_name,))
-    with builder.if_then(cgctx.is_null(builder, py_mod)):
-        cgctx.printf(builder, "PyImport_ImportModule failed\n")
-        builder.branch(bb_fallback)
-
-    bounce_func_name = cgctx.insert_const_string(mod, "loads")
-    bounce_func = builder.call(PyObject_GetAttrString, (py_mod,
-                                                        bounce_func_name))
-    with builder.if_then(cgctx.is_null(builder, bounce_func)):
-        cgctx.printf(builder, "PyObject_GetAttrString failed\n")
-        builder.branch(bb_fallback)
-
-    payload_pybytes = builder.call(PyBytes_FromStringAndSize,
-                                (payload, builder.load(len_payload)))
-    with builder.if_then(cgctx.is_null(builder, payload_pybytes)):
-        cgctx.printf(builder, "PyObject_CallFunctionObjArgs failed\n")
-        builder.branch(bb_fallback)
-
-    deserialized_payload = builder.call(PyObject_CallFunctionObjArgs,
-                                        (bounce_func, payload_pybytes,
-                                        PyObject_NULL))
-    with builder.if_then(cgctx.is_null(builder, deserialized_payload)):
-        cgctx.printf(builder, "PyObject_CallFunctionObjArgs failed\n")
-        builder.branch(bb_fallback)
-
-    # Create dictionary of "stuff" that's a bit like the frame to pass into the
-    # user defined eval replacement function
-    frame_dict = builder.call(PyDict_New, ())
-    with builder.if_then(cgctx.is_null(builder, frame_dict)):
-        cgctx.printf(builder, "PyDict_New failed\n")
-        builder.branch(bb_fallback)
-
-    f_func_obj = None
-    frame_keys = {'f_func': 0,
-                'f_globals': 1,
-                'f_builtins': 2,
-                'f_locals': 3,
-                'f_code': 4,
-                'frame_obj': 5
-                }
-    py_none = builder.bitcast(py_none_glbl, lt._pyobject_head_p)
-    for k, idx in frame_keys.items():
-        frame_func_addr = builder.gep(frame, [int32(x) for x in (0, idx)])
-        frame_func = builder.load(frame_func_addr)
-        # see if the thing is NULL, it might be
-        func_str = cgctx.insert_const_string(mod, k)
-        if _DEBUG:
-            cgctx.printf(builder, "func_str %s\n", func_str)
-            cgctx.printf(builder, "frame_func_addr IS NULL %d\n",
-                        cgctx.is_null(builder, frame_func_addr))
-            cgctx.printf(builder, "IS NULL %d\n",
-                        cgctx.is_null(builder, frame_func))
-        with builder.if_else(cgctx.is_null(builder, frame_func)) as \
-                (l_then, l_otherwise):
-            with l_then:
                 if _DEBUG:
-                    cgctx.printf(builder, "%s is null\n", func_str)
-                builder.call(Py_IncRef, [py_none,])
-                stat = builder.call(PyDict_SetItemString, (frame_dict, func_str,
-                                                        py_none))
-                with builder.if_then(builder.icmp_signed("!=", stat, i32_zero)):
-                    if _DEBUG:
-                        cgctx.printf(builder, "PyDict_SetItemString failed\n")
-                    builder.ret(PyObject_NULL)
-            with l_otherwise:
-                if _DEBUG:
-                    cgctx.printf(builder, "%s is not null\n", func_str)
-                builder.call(Py_IncRef,(frame_func,))
-                stat = builder.call(PyDict_SetItemString, (frame_dict, func_str,
-                                                        frame_func))
-                with builder.if_then(builder.icmp_signed("!=", stat, i32_zero)):
-                    cgctx.printf(builder, "PyDict_SetItemString failed\n")
-                    builder.ret(PyObject_NULL)
-
-                if k == "f_func":
-                    f_func_obj = frame_func
-
-
-
-    # Need to get the localsplus into the dict, it has an item count of up to
-    # `stacktop`s value. Allocate a tuple `stacktop` in size, start filling
-    # in the tuple with the values until a NULL value is hit, then truncate
-    # the tuple to that count in size.
-    stacktop_key = 8 # it's item 8 in the frame struct
-    frame_stacktop = builder.gep(frame, [int32(x) for x in (0, stacktop_key)])
-    stacktop_size = builder.load(frame_stacktop)
-    # get a tuple that can hold up to stacktop size things (it'll get
-    # truncated to the right size later).
-    tup = builder.call(PyTuple_New,
-                    (builder.sext(stacktop_size, lt._llvm_py_ssize_t),))
-    with builder.if_then(cgctx.is_null(builder, tup)):
-        cgctx.printf(builder, "PyTuple_New failed\n")
-        builder.ret(PyObject_NULL)
-    localsplus_key = 11
-    frame_localsplus = builder.gep(frame,
-                                [int32(x) for x in (0, localsplus_key)])
-    if _DEBUG:
-        cgctx.printf(builder, "stacktop_size is %d\n", stacktop_size)
-    with for_range(builder, count=stacktop_size) as (index, escape):
-        local = builder.load(builder.gep(frame_localsplus, [i32_zero, index,]))
-        pred = cgctx.is_null(builder, local)
-        with builder.if_then(pred):
-            if _DEBUG:
-                cgctx.printf(builder, "early exit for localsplus\n")
-            escape()
-        builder.call(Py_IncRef, [local,])
-        stat = builder.call(PyTuple_SetItem, (tup,
-                                            builder.sext(index,
-                                                        lt._llvm_py_ssize_t),
-                                            local))
-        with builder.if_then(builder.icmp_signed("!=", stat, i32_zero)):
-            cgctx.printf(builder, "PyTuple_SetItem failed\n")
-            builder.ret(PyObject_NULL)
-    tup_ptr = builder.alloca(lt._pyobject_head_p)
-    builder.store(tup, tup_ptr)
-    extended_idx = builder.sext(index, lt._llvm_py_ssize_t)
-    if _DEBUG:
-        cgctx.printf(builder, "localsplus size %d\n", extended_idx)
-    # This call potentially clobbers `tup` as a write through `tup_ptr`,
-    # future use of `tup` needs to be through a load of `tup_ptr`.
-    stat = builder.call(_PyTuple_Resize, (tup_ptr, extended_idx))
-    with builder.if_then(builder.icmp_signed("!=", stat, i32_zero)):
-        cgctx.printf(builder, "_PyTuple_Resize failed\n")
-        builder.ret(PyObject_NULL)
-    func_str = cgctx.insert_const_string(mod, "localsplus")
-    stat = builder.call(PyDict_SetItemString, (frame_dict, func_str,
-                                            builder.load(tup_ptr)))
-    with builder.if_then(builder.icmp_signed("!=", stat, i32_zero)):
-        cgctx.printf(builder, "PyDict_SetItemString failed\n")
-        builder.ret(PyObject_NULL)
-
-    # Finally... make the call to the user defined eval loop replacement
-    # function, it takes two args, 1. the "frame" dict, 2. the "cache" dict
-    # which is in the code object extran index for the current frame.
-
-    result = builder.call(PyObject_CallFunctionObjArgs,
-                        (deserialized_payload, frame_dict,
-                        builder.load(state), PyObject_NULL))
-
-    with builder.if_then(cgctx.is_null(builder, result)):
-        cgctx.printf(builder, "PyObject_CallFunctionObjArgs failed\n")
-        builder.ret(PyObject_NULL)
-
-    if _DEBUG:
-        pred = builder.icmp_unsigned("==", builder.load(original_evaluator),
-                                    _PyEval_EvalFrameDefault)
-        with builder.if_else(pred) as (then, otherwise):
-            with then:
-                cgctx.printf(builder, ("resetting frame eval to ORIGINAL which "
-                                    "is DEFAULT\n"))
+                    cgctx.printf(builder,
+                                ("after _PyCode_SetExtra in then: stat = %d,"
+                                "state = %d\n"), stat, builder.load(state))
+                    tmp = builder.call(_PyCode_GetExtra,
+                                    (builder.load(co), extra_code_index1,
+                                        builder.bitcast(state,
+                                                        void_star_star)))
+                    with builder.if_then(builder.icmp_signed("!=", tmp, i32_zero)):
+                        cgctx.printf(builder, "_PyCode_GetExtra failed\n")
+                        builder.call(PyErr_Clear, ())
+                        builder.branch(bb_fallback)
+                    cgctx.printf(builder,
+                                ("after _PyCode_GetExtra in then: stat = %d, "
+                                "state = %d\n"), stat, builder.load(state))
             with otherwise:
-                cgctx.printf(builder,
-                            ("resetting to frame eval ORIGINAL which is "
-                            "non-DEFAULT\n"))
+                if _DEBUG:
+                    cgctx.printf(builder, "co_extra \n")
 
-    # Set the interpreter back to the original one (this function)
-    builder.call(_PyInterpreterState_SetEvalFrameFunc,
-                (loaded_interp_field, builder.load(original_evaluator)))
+        # The co_extra cache is now set up, now work on the frame.
+        interp_field = builder.gep(ts, [int32(x) for x in (0, 2)])
+        loaded_interp_field = builder.load(interp_field)
 
-    # Now check what the user defined eval loop replacement function returned.
-    # If result[0] is True, the user eval frame function handled evaluation and
-    # the result[1] is the "answer", if result[0] is False the user eval frame
-    # function failed and so the standard __PyEval_EvalFrameDefault function
-    # needs calling.
+        # store a reference to the current frame interpreter
+        original_evaluator = builder.alloca(_PyFrameEvalFunction_ty)
+        builder.store(builder.call(_PyInterpreterState_GetEvalFrameFunc,
+                                (loaded_interp_field,)), original_evaluator)
+        # use the stock interpreter to evaluate the python payload
+        builder.call(_PyInterpreterState_SetEvalFrameFunc,
+                    (loaded_interp_field, _PyEval_EvalFrameDefault))
 
-    # first check that a 2-tuple has been returned
-    result_len = builder.call(PyTuple_Size, (result,))
-    len_is_2 = builder.icmp_signed("==", result_len, lt._llvm_py_ssize_t(2))
-    with builder.if_then(builder.not_(len_is_2)):
-        s = f"Expected eval loop hook '{name}' to return a 2-tuple."
-        msg = cgctx.insert_const_string(mod, s)
-        builder.call(PyErr_SetString, (builder.load(PyExc_ValueError), msg))
-        builder.ret(PyObject_NULL)
+        # this unpickles and loads the user defined eval replacement function
+        pickled_payload = pickle.dumps(eval_replacement_function)
+        payload = cgctx.insert_const_bytes(mod, pickled_payload)
+        sz = len(pickled_payload)
+        len_payload = cgctx.global_constant(mod, "_len_payload",
+                                            lt._llvm_py_ssize_t(sz))
 
-    # Fetch item 0 in the result tuple
-    eval_success = builder.call(PyTuple_GetItem,
-                                (result, ir.Constant(lt._llvm_py_ssize_t, 0)))
-    with builder.if_then(cgctx.is_null(builder, eval_success)):
-        cgctx.printf(builder, "PyTuple_GetItem failed\n")
-        builder.ret(PyObject_NULL)
-    py_true = builder.bitcast(py_true_glbl, lt._pyobject_head_p)
-    eval_success_pred = builder.icmp_signed("==", eval_success, py_true)
-    py_return = builder.alloca(lt._pyobject_head_p)
-    # if return[0] is True, then... otherwise...
-    with builder.if_else(eval_success_pred) as (then, otherwise):
-        with then:
-            # Success: set the return value to return[1]
+        py_mod_name = cgctx.insert_const_string(mod, "pickle")
+        py_mod = builder.call(PyImport_ImportModule, (py_mod_name,))
+        with builder.if_then(cgctx.is_null(builder, py_mod)):
+            cgctx.printf(builder, "PyImport_ImportModule failed\n")
+            builder.branch(bb_fallback)
+
+        bounce_func_name = cgctx.insert_const_string(mod, "loads")
+        bounce_func = builder.call(PyObject_GetAttrString, (py_mod,
+                                                            bounce_func_name))
+        with builder.if_then(cgctx.is_null(builder, bounce_func)):
+            cgctx.printf(builder, "PyObject_GetAttrString failed\n")
+            builder.branch(bb_fallback)
+
+        payload_pybytes = builder.call(PyBytes_FromStringAndSize,
+                                    (payload, builder.load(len_payload)))
+        with builder.if_then(cgctx.is_null(builder, payload_pybytes)):
+            cgctx.printf(builder, "PyObject_CallFunctionObjArgs failed\n")
+            builder.branch(bb_fallback)
+
+        deserialized_payload = builder.call(PyObject_CallFunctionObjArgs,
+                                            (bounce_func, payload_pybytes,
+                                            PyObject_NULL))
+        with builder.if_then(cgctx.is_null(builder, deserialized_payload)):
+            cgctx.printf(builder, "PyObject_CallFunctionObjArgs failed\n")
+            builder.branch(bb_fallback)
+
+        # Create dictionary of "stuff" that's a bit like the frame to pass into the
+        # user defined eval replacement function
+        frame_dict = builder.call(PyDict_New, ())
+        with builder.if_then(cgctx.is_null(builder, frame_dict)):
+            cgctx.printf(builder, "PyDict_New failed\n")
+            builder.branch(bb_fallback)
+
+        f_func_obj = None
+        frame_keys = {'f_func': 0,
+                    'f_globals': 1,
+                    'f_builtins': 2,
+                    'f_locals': 3,
+                    'f_code': 4,
+                    'frame_obj': 5
+                    }
+        py_none = builder.bitcast(py_none_glbl, lt._pyobject_head_p)
+        for k, idx in frame_keys.items():
+            frame_func_addr = builder.gep(frame, [int32(x) for x in (0, idx)])
+            frame_func = builder.load(frame_func_addr)
+            # see if the thing is NULL, it might be
+            func_str = cgctx.insert_const_string(mod, k)
             if _DEBUG:
-                cgctx.printf(builder, "evaluated OK with NON-DEFAULT\n")
-            tmp = builder.call(PyTuple_GetItem,
-                            (result, ir.Constant(lt._llvm_py_ssize_t, 1)))
-            with builder.if_then(cgctx.is_null(builder, tmp)):
-                cgctx.printf(builder, "PyTuple_GetItem failed\n")
-                builder.ret(PyObject_NULL)
-            builder.store(tmp, py_return)
-        with otherwise:
-            # Failure: Need to evaluate the frame with the standard eval frame
-            # function.
-            if _DEBUG:
-                cgctx.printf(builder,
-                            "evaluating with DEFAULT as NON-DEFAULT failed\n")
-            tmp = builder.call(_PyEval_EvalFrameDefault,
-                            (builder.load(ts_ptr), builder.load(frame_ptr),
-                                builder.load(throwflag)))
-            with builder.if_then(cgctx.is_null(builder, tmp)):
-                # cgctx.printf(builder,
-                #              "call to _PyEval_EvalFrameDefault failed\n")
+                cgctx.printf(builder, "func_str %s\n", func_str)
+                cgctx.printf(builder, "frame_func_addr IS NULL %d\n",
+                            cgctx.is_null(builder, frame_func_addr))
+                cgctx.printf(builder, "IS NULL %d\n",
+                            cgctx.is_null(builder, frame_func))
+            with builder.if_else(cgctx.is_null(builder, frame_func)) as \
+                    (l_then, l_otherwise):
+                with l_then:
+                    if _DEBUG:
+                        cgctx.printf(builder, "%s is null\n", func_str)
+                    builder.call(Py_IncRef, [py_none,])
+                    stat = builder.call(PyDict_SetItemString, (frame_dict, func_str,
+                                                            py_none))
+                    with builder.if_then(builder.icmp_signed("!=", stat, i32_zero)):
+                        if _DEBUG:
+                            cgctx.printf(builder, "PyDict_SetItemString failed\n")
+                        builder.ret(PyObject_NULL)
+                with l_otherwise:
+                    if _DEBUG:
+                        cgctx.printf(builder, "%s is not null\n", func_str)
+                    builder.call(Py_IncRef,(frame_func,))
+                    stat = builder.call(PyDict_SetItemString, (frame_dict, func_str,
+                                                            frame_func))
+                    with builder.if_then(builder.icmp_signed("!=", stat, i32_zero)):
+                        cgctx.printf(builder, "PyDict_SetItemString failed\n")
+                        builder.ret(PyObject_NULL)
 
-                # fmt_str = cgctx.insert_const_string(mod, f"_PyEval_EvalFrameDefault failed ... f_func: %R\n")
-                # builder.call(PySys_FormatStderr, [fmt_str, f_func_obj])
-                builder.ret(PyObject_NULL)
-            builder.store(tmp, py_return)
+                    if k == "f_func":
+                        f_func_obj = frame_func
 
-    builder.ret(builder.load(py_return))
+
+
+        # Need to get the localsplus into the dict, it has an item count of up to
+        # `stacktop`s value. Allocate a tuple `stacktop` in size, start filling
+        # in the tuple with the values until a NULL value is hit, then truncate
+        # the tuple to that count in size.
+        stacktop_key = 8 # it's item 8 in the frame struct
+        frame_stacktop = builder.gep(frame, [int32(x) for x in (0, stacktop_key)])
+        stacktop_size = builder.load(frame_stacktop)
+        # get a tuple that can hold up to stacktop size things (it'll get
+        # truncated to the right size later).
+        tup = builder.call(PyTuple_New,
+                        (builder.sext(stacktop_size, lt._llvm_py_ssize_t),))
+        with builder.if_then(cgctx.is_null(builder, tup)):
+            cgctx.printf(builder, "PyTuple_New failed\n")
+            builder.ret(PyObject_NULL)
+        localsplus_key = 11
+        frame_localsplus = builder.gep(frame,
+                                    [int32(x) for x in (0, localsplus_key)])
+        if _DEBUG:
+            cgctx.printf(builder, "stacktop_size is %d\n", stacktop_size)
+        with for_range(builder, count=stacktop_size) as (index, escape):
+            local = builder.load(builder.gep(frame_localsplus, [i32_zero, index,]))
+            pred = cgctx.is_null(builder, local)
+            with builder.if_then(pred):
+                if _DEBUG:
+                    cgctx.printf(builder, "early exit for localsplus\n")
+                escape()
+            builder.call(Py_IncRef, [local,])
+            stat = builder.call(PyTuple_SetItem, (tup,
+                                                builder.sext(index,
+                                                            lt._llvm_py_ssize_t),
+                                                local))
+            with builder.if_then(builder.icmp_signed("!=", stat, i32_zero)):
+                cgctx.printf(builder, "PyTuple_SetItem failed\n")
+                builder.ret(PyObject_NULL)
+        tup_ptr = builder.alloca(lt._pyobject_head_p)
+        builder.store(tup, tup_ptr)
+        extended_idx = builder.sext(index, lt._llvm_py_ssize_t)
+        if _DEBUG:
+            cgctx.printf(builder, "localsplus size %d\n", extended_idx)
+        # This call potentially clobbers `tup` as a write through `tup_ptr`,
+        # future use of `tup` needs to be through a load of `tup_ptr`.
+        stat = builder.call(_PyTuple_Resize, (tup_ptr, extended_idx))
+        with builder.if_then(builder.icmp_signed("!=", stat, i32_zero)):
+            cgctx.printf(builder, "_PyTuple_Resize failed\n")
+            builder.ret(PyObject_NULL)
+        func_str = cgctx.insert_const_string(mod, "localsplus")
+        stat = builder.call(PyDict_SetItemString, (frame_dict, func_str,
+                                                builder.load(tup_ptr)))
+        with builder.if_then(builder.icmp_signed("!=", stat, i32_zero)):
+            cgctx.printf(builder, "PyDict_SetItemString failed\n")
+            builder.ret(PyObject_NULL)
+
+        # Finally... make the call to the user defined eval loop replacement
+        # function, it takes two args, 1. the "frame" dict, 2. the "cache" dict
+        # which is in the code object extran index for the current frame.
+
+        result = builder.call(PyObject_CallFunctionObjArgs,
+                            (deserialized_payload, frame_dict,
+                            builder.load(state), PyObject_NULL))
+
+        with builder.if_then(cgctx.is_null(builder, result)):
+            cgctx.printf(builder, "PyObject_CallFunctionObjArgs failed\n")
+            builder.ret(PyObject_NULL)
+
+        if _DEBUG:
+            pred = builder.icmp_unsigned("==", builder.load(original_evaluator),
+                                        _PyEval_EvalFrameDefault)
+            with builder.if_else(pred) as (then, otherwise):
+                with then:
+                    cgctx.printf(builder, ("resetting frame eval to ORIGINAL which "
+                                        "is DEFAULT\n"))
+                with otherwise:
+                    cgctx.printf(builder,
+                                ("resetting to frame eval ORIGINAL which is "
+                                "non-DEFAULT\n"))
+
+        # Set the interpreter back to the original one (this function)
+        builder.call(_PyInterpreterState_SetEvalFrameFunc,
+                    (loaded_interp_field, builder.load(original_evaluator)))
+
+        # Now check what the user defined eval loop replacement function returned.
+        # If result[0] is True, the user eval frame function handled evaluation and
+        # the result[1] is the "answer", if result[0] is False the user eval frame
+        # function failed and so the standard __PyEval_EvalFrameDefault function
+        # needs calling.
+
+        # first check that a 2-tuple has been returned
+        result_len = builder.call(PyTuple_Size, (result,))
+        len_is_2 = builder.icmp_signed("==", result_len, lt._llvm_py_ssize_t(2))
+        with builder.if_then(builder.not_(len_is_2)):
+            s = f"Expected eval loop hook '{name}' to return a 2-tuple."
+            msg = cgctx.insert_const_string(mod, s)
+            builder.call(PyErr_SetString, (builder.load(PyExc_ValueError), msg))
+            builder.ret(PyObject_NULL)
+
+        # Fetch item 0 in the result tuple
+        eval_success = builder.call(PyTuple_GetItem,
+                                    (result, ir.Constant(lt._llvm_py_ssize_t, 0)))
+        with builder.if_then(cgctx.is_null(builder, eval_success)):
+            cgctx.printf(builder, "PyTuple_GetItem failed\n")
+            builder.ret(PyObject_NULL)
+        py_true = builder.bitcast(py_true_glbl, lt._pyobject_head_p)
+        eval_success_pred = builder.icmp_signed("==", eval_success, py_true)
+        py_return = builder.alloca(lt._pyobject_head_p)
+        # if return[0] is True, then... otherwise...
+        with builder.if_else(eval_success_pred) as (then, otherwise):
+            with then:
+                # Success: set the return value to return[1]
+                if _DEBUG:
+                    cgctx.printf(builder, "evaluated OK with NON-DEFAULT\n")
+                tmp = builder.call(PyTuple_GetItem,
+                                (result, ir.Constant(lt._llvm_py_ssize_t, 1)))
+                with builder.if_then(cgctx.is_null(builder, tmp)):
+                    cgctx.printf(builder, "PyTuple_GetItem failed\n")
+                    builder.ret(PyObject_NULL)
+                builder.store(tmp, py_return)
+            with otherwise:
+                # Failure: Need to evaluate the frame with the standard eval frame
+                # function.
+                if _DEBUG:
+                    cgctx.printf(builder,
+                                "evaluating with DEFAULT as NON-DEFAULT failed\n")
+                tmp = builder.call(_PyEval_EvalFrameDefault,
+                                (builder.load(ts_ptr), builder.load(frame_ptr),
+                                    builder.load(throwflag)))
+                with builder.if_then(cgctx.is_null(builder, tmp)):
+                    # cgctx.printf(builder,
+                    #              "call to _PyEval_EvalFrameDefault failed\n")
+
+                    # fmt_str = cgctx.insert_const_string(mod, f"_PyEval_EvalFrameDefault failed ... f_func: %R\n")
+                    # builder.call(PySys_FormatStderr, [fmt_str, f_func_obj])
+                    builder.ret(PyObject_NULL)
+                builder.store(tmp, py_return)
+
+        builder.ret(builder.load(py_return))
     # --------------------------------------------------------------------------
     # End custom eval frame function
     # --------------------------------------------------------------------------
