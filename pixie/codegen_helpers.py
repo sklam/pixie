@@ -376,6 +376,8 @@ class Codegen():
         options['reloc'] = 'pic'
         options['codemodel'] = 'jitdefault'
         options['features'] = self._tm_features
+        print('==options==')
+        print(options)
 
 
 def _inlining_threshold(optlevel, sizelevel=0):

@@ -217,16 +217,27 @@ class PixieTestCase(TestCase):
                                      cpus.nocona,
                                      "sse2",
                                      ("sse3", "avx2", "avx512f"))
+        if arch == "arm64":
+            from pixie.targets.arm64 import cpus
+            return TargetDescription(triple,
+                                     cpus.apple_m1,
+                                     "neon",    # TODO
+                                     ("neon", "fullfp16"))    # TODO
         else:
             raise ValueError(f"Unsupported triple: '{triple}'.")
 
 
+
+clang = os.environ.get('CLANG', 'clang')
+
+
 @lru_cache
 def _has_clang():
-    cmd = ('clang', '--help')
+    cmd = (clang, '--help')
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=10.,
                                 check=True)
+
         return bool(not result.returncode)
     except FileNotFoundError:
         return False
@@ -247,3 +258,6 @@ needs_subprocess = unittest.skipUnless(_exec_cond, "needs subprocess harness")
 
 x86_64_only = unittest.skipIf(platform.machine() != 'x86_64',
                               'x86_64 only test')
+
+arm64_only = unittest.skipIf(platform.machine() != 'arm64',
+                             'arm64 only test')
