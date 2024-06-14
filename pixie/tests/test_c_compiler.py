@@ -1,5 +1,5 @@
 from pixie import PIXIECompiler, TranslationUnit, ExportConfiguration
-from pixie.tests.support import PixieTestCase, needs_clang, clang
+from pixie.tests.support import PixieTestCase, needs_clang
 import ctypes
 import os
 import numpy as np
@@ -21,7 +21,7 @@ class TestCCompiler(PixieTestCase):
             prefix = 'pixie-c-build-'
             with tempfile.TemporaryDirectory(prefix=prefix) as build_dir:
                 outfile = os.path.join(build_dir, 'tmp.bc')
-                cmd = (clang, '-x', 'c', '-fPIC', '-mcmodel=small',
+                cmd = ('clang', '-x', 'c', '-fPIC', '-mcmodel=small',
                        '-emit-llvm', fname, '-o', outfile, '-c')
                 subprocess.run(cmd)
                 with open(outfile, 'rb') as f:

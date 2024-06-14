@@ -91,7 +91,6 @@ class TestSelectors(PixieTestCase):
         extracted_embedded_dso_path_bytes = ctypes.cast(uniq_filepath_global,
                                                         ctypes.c_char_p).value
         extracted_embedded_dso_path = extracted_embedded_dso_path_bytes.decode()
-        assert extracted_embedded_dso_path
         extracted_embedded_dso = ctypes.CDLL(extracted_embedded_dso_path)
         extracted_embedded_dso.foo.restype = ctypes.c_int
         extracted_embedded_dso.foo.argtypes = ()

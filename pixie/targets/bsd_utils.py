@@ -12,7 +12,7 @@ libc.sysctlbyname.argtypes = [
     c_void_p,  # newlenp
 ]
 
-def sysctlbyname(name):
+def sysctlbyname(name: bytes) -> bytes:
     """
     Wrapper around sysctlbyname on BSD-like, including Darwin.
 

@@ -31,17 +31,10 @@ def create_cpu_enum_for_target(triple_str):
 
     src = ''.join((textwrap.dedent(inspect.getsource(get_target)),
                    f"\nget_target('{triple_str}')"))
-    print(src)
     cmd = (sys.executable, "-c", src)
-    try:
-        result = subprocess.run(cmd, capture_output=True, encoding="utf-8",
-                                check=True)
-    except:
-        import traceback
-        traceback.print_exc()
+    result = subprocess.run(cmd, capture_output=True, encoding="utf-8",
+                            check=True)
     target_info_str = result.stderr
-    print("==target_info_str==")
-    print(target_info_str)
 
     def parse_target_info_str(data):
         # fetch the CPUs, the list is broken by strings:
@@ -61,6 +54,7 @@ def create_cpu_enum_for_target(triple_str):
     all_cpus = parse_target_info_str(target_info_str)
 
     def fix_dash(x):
+        # Should this really be here?
         return x.replace('-', '_')
 
     cpus = CPUEnum('cpus', list(map(fix_dash, all_cpus)))
@@ -189,7 +183,6 @@ class TargetDescription():
                "supplied to {kwarg})")
         ret = None
         if isinstance(feat, str):
-            feat = feat.replace('-', '_')
             resolved_feat = getattr(self.arch.features, feat, None)
             if resolved_feat is None:
                 raise ValueError(msg)
