@@ -142,7 +142,7 @@ class TestSelectors(PixieTestCase):
     @arm64_only
     def test_arm64_isa_selector(self):
 
-        dispatch_keys = ('baseline', 'V8_4A', 'NEON', 'FULLFP16')
+        dispatch_keys = ('baseline', 'V8_4A', 'V8_5A', 'V8_6A', 'V8_6A_BF16')
         expected, dispatch_data = self.gen_dispatch_and_expected(dispatch_keys)
 
 
@@ -152,8 +152,10 @@ class TestSelectors(PixieTestCase):
 
         # Compile into DSO
         dso = os.path.join(self.tmpdir.name, uuid.uuid4().hex)
-        target_features = Features((arm64.features.v8_4a, arm64.features.neon,))
-        compiler_driver = SimpleCompilerDriver(target_cpu='apple_m1',
+        target_features = Features((
+            arm64.features.v8_6a, arm64.features.bf16,
+        ))
+        compiler_driver = SimpleCompilerDriver(target_cpu='apple-m1',
                                                target_features=target_features)
         compiler_driver.compile_and_link(sources=(llvm_ir,), outfile=dso)
 
@@ -169,17 +171,19 @@ class TestSelectors(PixieTestCase):
         extracted_embedded_dso.foo.restype = ctypes.c_int
         extracted_embedded_dso.foo.argtypes = ()
 
-        # look for the highest available feature that is also in the dispatch
-        # list.
-        from numpy.core._multiarray_umath import __cpu_features__
-        highest_feature = None
-        print('expected', expected)
-        for isa, present in __cpu_features__.items():
-            if present:
-                print(f'isa {isa}')
-            if present and isa in expected:
-                print("HIGEST", isa)
-                highest_feature = isa
+        # Skip numpy feature lookup, it only knows about v8-a features and
+        # on Apple the minimum supported version is v8.4-a.
 
-        assert highest_feature is not None
-        assert extracted_embedded_dso.foo() == expected[highest_feature]
+        selected = extracted_embedded_dso.foo()
+
+        revmap = {v: k for k, v in expected.items()}
+
+        cpu_brand_name = arm64.sysctlbyname("machdep.cpu.brand_string".encode())
+        cpu_brand_name = cpu_brand_name.decode()
+        if cpu_brand_name.startswith("Apple M1"):
+            correct_result = 'V8_4A'
+        elif cpu_branch_name.startswith("Apple M2"):
+            correct_result = 'V8_6A_BF16'
+        else:
+            correct_result = 'baseline'
+        assert correct_result == revmap[selected]
