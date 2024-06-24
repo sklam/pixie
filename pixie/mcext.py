@@ -35,6 +35,7 @@ _va_list_ty = ir.LiteralStructType([langref.types.i32,
                                     langref.types.i32,
                                     langref.types.i8.as_pointer(),
                                     langref.types.i8.as_pointer()])
+_va_list_ty = langref.types.i8.as_pointer()
 c.stdarg = SimpleNamespace(va_list=_va_list_ty)
 
 
@@ -342,35 +343,41 @@ def _snprintf(builder,  _str, _size, _format, *varargs):
         fn = get_or_insert_function(builder.module, outer_fnty, "libc.snprintf")
         fn.linkage = "internal"
         block = fn.append_basic_block('snprintf_impl')
-        local_builder = ir.IRBuilder(block)
 
-        # need to use va_args as this is forwarding variadic args to an inner
-        # function
-        i8_ptr = langref.types.i8.as_pointer()
-        va_list_ptr = local_builder.alloca(c.stdarg.va_list)
-        va_list = local_builder.bitcast(va_list_ptr, i8_ptr)
+        def build_snprintf_impl(builder):
+            # need to use va_args as this is forwarding variadic args to an inner
+            # function
+            i8_ptr = langref.types.i8.as_pointer()
+            va_list_ptr = builder.alloca(c.stdarg.va_list)
+            va_list = builder.bitcast(va_list_ptr, i8_ptr)
 
-        llvm_va_start_fnty = ir.FunctionType(langref.types.void, (i8_ptr,))
-        llvm_va_start_fn = get_or_insert_function(builder.module,
-                                                  llvm_va_start_fnty,
-                                                  "llvm.va_start")
+            llvm_va_start_fnty = ir.FunctionType(langref.types.void, (i8_ptr,))
+            llvm_va_start_fn = get_or_insert_function(builder.module,
+                                                    llvm_va_start_fnty,
+                                                    "llvm.va_start")
 
-        local_builder.call(llvm_va_start_fn, (va_list,))
+            builder.call(llvm_va_start_fn, (va_list,))
 
-        vsnprintf_fnty = ir.FunctionType(c.types.int,
-                                         (_str.type, _size.type, _format.type,
-                                          c.stdarg.va_list.as_pointer()))
-        c_fn = get_or_insert_function(builder.module, vsnprintf_fnty,
-                                      "vsnprintf")
+            vsnprintf_fnty = ir.FunctionType(c.types.int,
+                                             (_str.type, _size.type,
+                                              _format.type, i8_ptr))
+            c_fn = get_or_insert_function(builder.module, vsnprintf_fnty,
+                                          "vsnprintf")
 
-        retval = local_builder.call(c_fn, fn.args + (va_list_ptr,))
+            if True:
+                inner_args = builder.load(va_list_ptr)
+            else:
+                inner_args = va_list_ptr
+            retval = builder.call(c_fn, fn.args + (inner_args,))
 
-        llvm_va_end_fnty = ir.FunctionType(langref.types.void, (i8_ptr,))
-        llvm_va_end_fn = get_or_insert_function(builder.module,
-                                                llvm_va_end_fnty, "llvm.va_end")
+            llvm_va_end_fnty = ir.FunctionType(langref.types.void, (i8_ptr,))
+            llvm_va_end_fn = get_or_insert_function(builder.module,
+                                                    llvm_va_end_fnty, "llvm.va_end")
 
-        local_builder.call(llvm_va_end_fn, (va_list,))
-        local_builder.ret(retval)
+            builder.call(llvm_va_end_fn, (va_list,))
+            builder.ret(retval)
+
+        build_snprintf_impl(ir.IRBuilder(block))
         return builder.call(fn, [_str, _size, _format] + list(varargs))
     else:
         fn = get_or_insert_function(builder.module, outer_fnty, "libc.snprintf")
@@ -571,8 +578,10 @@ c.fcntl = SimpleNamespace(open=_open,
                           shm_open=_shm_open,
                           shm_unlink=_shm_unlink,
                           # consts, in octal
-                          O_RDWR=ir.Constant(c.types.int, 0o02),
-                          O_CREAT=ir.Constant(c.types.int, 0o100),
+                          # https://github.com/apple-oss-distributions/xnu/blob/94d3b452840153a99b38a3a9659680b2a006908e/bsd/sys/fcntl.h#L100
+                          O_RDWR=ir.Constant(c.types.int, 0x2),
+                          # https://github.com/apple-oss-distributions/xnu/blob/94d3b452840153a99b38a3a9659680b2a006908e/bsd/sys/fcntl.h#L127
+                          O_CREAT=ir.Constant(c.types.int, 0x200),
                           )
 
 

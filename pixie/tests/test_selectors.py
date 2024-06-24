@@ -75,8 +75,8 @@ class TestSelectors(PixieTestCase):
 
         selector_class = PyVersionSelector
         # FIXME: shmEmbeddedDSOHandler probably used the wrong shm_open flag
-        # dso_handler = shmEmbeddedDSOHandler()
-        dso_handler = mkstempEmbeddedDSOHandler()
+        dso_handler = shmEmbeddedDSOHandler()
+        # dso_handler = mkstempEmbeddedDSOHandler()
         llvm_ir = self.gen_mod(dispatch_data, selector_class, dso_handler)
 
         dso = os.path.join(self.tmpdir.name, uuid.uuid4().hex)
@@ -95,6 +95,7 @@ class TestSelectors(PixieTestCase):
         extracted_embedded_dso_path_bytes = ctypes.cast(uniq_filepath_global,
                                                         ctypes.c_char_p).value
         extracted_embedded_dso_path = extracted_embedded_dso_path_bytes.decode()
+        print(extracted_embedded_dso_path_bytes)
         extracted_embedded_dso = ctypes.CDLL(extracted_embedded_dso_path)
         extracted_embedded_dso.foo.restype = ctypes.c_int
         extracted_embedded_dso.foo.argtypes = ()

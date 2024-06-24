@@ -218,6 +218,7 @@ class EmbeddedDSOHandler():
         self._ctx = Context()
         self._EXTRACTED_FILEPATH = None
         self._NAME_MAX = 255
+        self._SHM_NAME_MAX = 32
         self._DEBUG = False
 
     def debug_print(self, builder, *args):
@@ -296,9 +297,17 @@ class shmEmbeddedDSOHandler(EmbeddedDSOHandler):
     """
 
     def create(self, builder, thebytes, nbytes):
+        def insert_perror(code, msg):
+            failed = builder.icmp_signed('==', code, code.type(-1))
+            with builder.if_then(failed):
+                c.stdio.perror(builder, self._ctx.insert_const_string(mod, msg))
+
+
+        self._DEBUG = 1
         mod = builder.module
         size_t_name_max = ir.Constant(c.stddef.size_t, self.NAME_MAX)
-        shm_name = f"/{uuid.uuid4().hex}.so"
+
+        shm_name = f"/{uuid.uuid4().hex[:self._SHM_NAME_MAX - 5]}.so"
         shm_file_name = self._ctx.insert_const_string(mod, shm_name)
 
         self._shm_file_name = shm_file_name
@@ -314,12 +323,15 @@ class shmEmbeddedDSOHandler(EmbeddedDSOHandler):
                                                   c.types.charptr),
                                   builder.load(_oflag),
                                   builder.load(_mode))
-        self.debug_print(builder, "done shm_open(%s) -> %d\n", shm_file_name,
+        self.debug_print(builder, "done shm_open(%s, %d, %d) -> %d\n",
+                         shm_file_name,
+                         builder.load(_oflag),
+                         builder.load(_mode),
                          shm_fd)
 
         # ftruncate the shm_fd to the length of the bytes
-        c.unistd.ftruncate(builder, shm_fd, builder.trunc(nbytes, c.types.int))
-        self.debug_print(builder, "done truncate\n")
+        code = c.unistd.ftruncate(builder, shm_fd, builder.trunc(nbytes, c.types.int))
+        self.debug_print(builder, "done truncate -> %d\n", code)
         # write bytes into the shm_fd
         c.unistd.write(builder, shm_fd, thebytes, nbytes)
 
@@ -363,6 +375,7 @@ class shmEmbeddedDSOHandler(EmbeddedDSOHandler):
                                             shm_file_path,
                                             size_t_name_max)
         self.debug_print(builder, "done readlink %d\n", readlink_result)
+        insert_perror(readlink_result, "readline failed:")
 
         self.debug_print(builder, "shm_file_path %s\n", shm_file_path)
 
