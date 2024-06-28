@@ -11,7 +11,10 @@ def mvp_compile():
                              export_configuration=export_config,
                              **get_default_configuration(),
                              python_cext=True,
-                             output_dir='.')
+                             output_dir='.',
+                             opt_flags={
+                                'loop_vectorize': True,
+                                'slp_vectorize': True})
     compiler.compile()
 
 

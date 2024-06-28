@@ -6,8 +6,16 @@ cimport libc.math
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
-def central_diff_order2(float[::1] x, float h):
-    n = x.shape[0]
-    cdef Py_ssize_t i
-    for i in range(1, n - 1):
-        x[i] = (x[i + 1] - float(2.) * x[i] + x[i - 1]) / (h * h)
+def matvec(float[::1] out, float[:, ::1] mat, float[::1] vec):
+    cdef size_t row = mat.shape[0]
+    cdef size_t col = mat.shape[1]
+    cdef size_t i, j
+    cdef float c
+
+    for i in range(row):
+        c = 0.
+        for j in range(col):
+            c += mat[i, j] * vec[j]
+        out[i] = c
+    
+    

@@ -26,6 +26,7 @@ from pixie import llvm_types as lt
 
 IS_LINUX = sys.platform.startswith('linux')
 
+total_output = 0
 
 class SimpleCompiler():
     # takes llvm_ir, compiles it to an object file
@@ -77,6 +78,12 @@ class SimpleCompiler():
                     f.write(remarks)
             else:
                 mpm.run(codelibrary._final_module)
+                global total_output
+                with open(f"llvm_{total_output}.ll", 'w') as fout:
+                    print(f'; {total_output}: {self._target_features}')
+                    print(f'; {total_output}: {self._target_features}', file=fout)
+                    print(codelibrary._final_module, file=fout)
+                    total_output += 1
 
             objects.append(codelibrary.emit_native_object())
             del codelibrary
@@ -150,7 +157,7 @@ class TranslationUnit():
             # NOTE: This needs to be -O1 or great, -O0 adds `optnone` to
             # function attributes which then prevents optimisation by the PIXIE
             # toolchain.
-            cmd = ('clang', '-x', 'c', '-O1',
+            cmd = ('clang', '-x', 'c', '-O1', '-ffast-math',
                    '-I', sysconfig.get_path("include"),
                    '-fPIC', '-mcmodel=small',
                    *extra_flags,
@@ -166,6 +173,8 @@ class TranslationUnit():
             ntf.flush()
             with open(ntf.name, 'rt') as f:
                 data = f.read()
+            with open('output.ll', 'w') as f:
+                print(data, file=f)
         _name = name or path_to_c_file
         return TranslationUnit(_name, data)
 
@@ -444,7 +453,7 @@ class PIXIEModule(IRGenerator):
         binaries = {}
         all_features = (set(self._target_descr.additional_targets) |
                         {self._target_descr.baseline_target})
-        for cpu_descr in all_features:
+        for cpu_descr in sorted(all_features, key=str):
             cpu_name = str(cpu_descr.cpu)
             features = cpu_descr.features
             cpu_feature = Features(features)
